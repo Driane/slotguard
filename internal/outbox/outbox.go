@@ -45,4 +45,12 @@ type Store interface {
 	// Bury gives up on an event that failed too many times. It is kept for
 	// inspection but never claimed again.
 	Bury(ctx context.Context, id int64, at time.Time, reason string) error
+
+	// Pending counts the events still to deliver: neither delivered nor
+	// buried. A growing number means the endpoint is down or too slow.
+	Pending(ctx context.Context) (int, error)
+
+	// Purge deletes the events delivered before the given time and returns
+	// how many were deleted. Buried events are kept for inspection.
+	Purge(ctx context.Context, deliveredBefore time.Time) (int64, error)
 }

@@ -66,6 +66,27 @@ func (s *Store) Bury(ctx context.Context, id int64, at time.Time, reason string)
 	return s.updateEvent(ctx, `UPDATE outbox_events SET dead_at = $2, last_error = $3 WHERE id = $1`, id, at, reason)
 }
 
+// Pending implements outbox.Store.
+func (s *Store) Pending(ctx context.Context) (int, error) {
+	var n int
+	err := s.pool.QueryRow(ctx,
+		`SELECT count(*) FROM outbox_events WHERE delivered_at IS NULL AND dead_at IS NULL`,
+	).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count pending events: %w", err)
+	}
+	return n, nil
+}
+
+// Purge implements outbox.Store.
+func (s *Store) Purge(ctx context.Context, deliveredBefore time.Time) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM outbox_events WHERE delivered_at < $1`, deliveredBefore)
+	if err != nil {
+		return 0, fmt.Errorf("purge delivered events: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 func (s *Store) updateEvent(ctx context.Context, sql string, args ...any) error {
 	tag, err := s.pool.Exec(ctx, sql, args...)
 	if err != nil {

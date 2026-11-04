@@ -146,6 +146,52 @@ func RunStoreTests(t *testing.T, newStore func(t *testing.T) Store) {
 		}
 	})
 
+	t.Run("pending counts the events still to deliver", func(t *testing.T) {
+		store := newStore(t)
+		for range 3 {
+			book(t, store, "alice")
+		}
+		now := later(time.Second)
+		events := claim(t, store, now, 10, lease)
+		if err := store.MarkDelivered(context.Background(), events[0].ID, now); err != nil {
+			t.Fatalf("MarkDelivered: %v", err)
+		}
+		if err := store.Bury(context.Background(), events[1].ID, now, "too many failures"); err != nil {
+			t.Fatalf("Bury: %v", err)
+		}
+
+		// One delivered, one buried: only the third one is still pending,
+		// even while it is claimed.
+		if got := pending(t, store); got != 1 {
+			t.Fatalf("Pending = %d, want 1", got)
+		}
+	})
+
+	t.Run("purge deletes only events delivered before the cutoff", func(t *testing.T) {
+		store := newStore(t)
+		for range 4 {
+			book(t, store, "alice")
+		}
+		now := later(time.Second)
+		events := claim(t, store, now, 10, lease)
+		ctx := context.Background()
+		mustNotFail(t, store.MarkDelivered(ctx, events[0].ID, now.Add(-48*time.Hour))) // old: purged
+		mustNotFail(t, store.MarkDelivered(ctx, events[1].ID, now))                    // recent: kept
+		mustNotFail(t, store.Bury(ctx, events[2].ID, now.Add(-48*time.Hour), "dead"))  // buried: kept
+
+		deleted, err := store.Purge(ctx, now.Add(-24*time.Hour))
+		if err != nil {
+			t.Fatalf("Purge: %v", err)
+		}
+		if deleted != 1 {
+			t.Fatalf("Purge deleted %d events, want 1", deleted)
+		}
+		if err := store.MarkDelivered(ctx, events[0].ID, now); !errors.Is(err, outbox.ErrNotFound) {
+			t.Fatalf("purged event still exists: err = %v", err)
+		}
+		mustNotFail(t, store.MarkDelivered(ctx, events[1].ID, now)) // still there
+	})
+
 	t.Run("unknown event", func(t *testing.T) {
 		store := newStore(t)
 		if err := store.MarkDelivered(context.Background(), 987654321, time.Now()); !errors.Is(err, outbox.ErrNotFound) {
@@ -210,6 +256,22 @@ func claim(t *testing.T, store outbox.Store, now time.Time, limit int, lease tim
 		t.Fatalf("Claim: %v", err)
 	}
 	return events
+}
+
+func pending(t *testing.T, store outbox.Store) int {
+	t.Helper()
+	n, err := store.Pending(context.Background())
+	if err != nil {
+		t.Fatalf("Pending: %v", err)
+	}
+	return n
+}
+
+func mustNotFail(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 func book(t *testing.T, store booking.Store, customerID string) booking.Booking {

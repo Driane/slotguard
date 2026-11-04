@@ -29,6 +29,7 @@ type event struct {
 	outbox.Event
 	nextAttempt time.Time
 	delivered   bool
+	deliveredAt time.Time
 	buried      bool
 	lastError   string
 }
@@ -126,8 +127,11 @@ func (s *Store) Claim(_ context.Context, now time.Time, limit int, lease time.Du
 }
 
 // MarkDelivered implements outbox.Store.
-func (s *Store) MarkDelivered(_ context.Context, id int64, _ time.Time) error {
-	return s.update(id, func(e *event) { e.delivered = true })
+func (s *Store) MarkDelivered(_ context.Context, id int64, at time.Time) error {
+	return s.update(id, func(e *event) {
+		e.delivered = true
+		e.deliveredAt = at
+	})
 }
 
 // Retry implements outbox.Store.
@@ -144,6 +148,35 @@ func (s *Store) Bury(_ context.Context, id int64, _ time.Time, reason string) er
 		e.buried = true
 		e.lastError = reason
 	})
+}
+
+// Pending implements outbox.Store.
+func (s *Store) Pending(_ context.Context) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	n := 0
+	for _, e := range s.events {
+		if !e.delivered && !e.buried {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// Purge implements outbox.Store.
+func (s *Store) Purge(_ context.Context, deliveredBefore time.Time) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var deleted int64
+	for id, e := range s.events {
+		if e.delivered && e.deliveredAt.Before(deliveredBefore) {
+			delete(s.events, id) // deleting while ranging over a map is allowed in Go
+			deleted++
+		}
+	}
+	return deleted, nil
 }
 
 func (s *Store) update(id int64, change func(*event)) error {
