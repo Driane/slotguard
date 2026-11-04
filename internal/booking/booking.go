@@ -3,9 +3,14 @@
 package booking
 
 import (
+	"encoding/json"
 	"errors"
 	"time"
 )
+
+// EventBookingCreated is the type of the outbox event written with every new
+// booking, in the same transaction.
+const EventBookingCreated = "booking.created"
 
 // Errors returned by the booking service and its stores. Callers compare
 // them with errors.Is, because they are often wrapped with more context.
@@ -56,6 +61,18 @@ type BookingResult struct {
 // that is for the same slot and the same customer.
 func (b Booking) SameRequestAs(other Booking) bool {
 	return b.SlotID == other.SlotID && b.CustomerID == other.CustomerID
+}
+
+// EventPayload returns the JSON document carried by the booking.created
+// event. It deliberately leaves out the idempotency key, which is a client
+// secret, not something to broadcast.
+func EventPayload(b Booking) ([]byte, error) {
+	return json.Marshal(struct {
+		ID         string    `json:"id"`
+		SlotID     string    `json:"slot_id"`
+		CustomerID string    `json:"customer_id"`
+		CreatedAt  time.Time `json:"created_at"`
+	}{b.ID, b.SlotID, b.CustomerID, b.CreatedAt})
 }
 
 // Replay returns the outcome of attempt when its idempotency key already

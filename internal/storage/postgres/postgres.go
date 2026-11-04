@@ -1,6 +1,7 @@
-// Package postgres implements booking.Store on PostgreSQL. The database, not
-// the application, guarantees that a slot is booked at most once: two UNIQUE
-// constraints reject any second booking, however many requests race.
+// Package postgres implements booking.Store and outbox.Store on PostgreSQL.
+// The database, not the application, guarantees that a slot is booked at most
+// once: two UNIQUE constraints reject any second booking, however many
+// requests race. Each booking and its outbox event share one transaction.
 package postgres
 
 import (
@@ -78,10 +79,12 @@ func (s *Store) Book(ctx context.Context, b booking.Booking) (booking.BookingRes
 		return booking.BookingResult{}, err
 	}
 
-	_, err = s.pool.Exec(ctx,
-		`INSERT INTO bookings (id, slot_id, customer_id, idempotency_key, created_at)
-		 VALUES ($1, $2, $3, $4, $5)`,
-		b.ID, b.SlotID, b.CustomerID, b.IdempotencyKey, b.CreatedAt)
+	payload, err := booking.EventPayload(b)
+	if err != nil {
+		return booking.BookingResult{}, err
+	}
+
+	err = s.insertBookingWithEvent(ctx, b, payload)
 	switch {
 	case err == nil:
 		return booking.BookingResult{Booking: b}, nil
@@ -92,6 +95,31 @@ func (s *Store) Book(ctx context.Context, b booking.Booking) (booking.BookingRes
 	default:
 		return booking.BookingResult{}, fmt.Errorf("insert booking: %w", err)
 	}
+}
+
+// insertBookingWithEvent writes the booking and its outbox event in a single
+// transaction: both are stored, or neither is. Constraint errors are returned
+// as they are, for Book to interpret.
+func (s *Store) insertBookingWithEvent(ctx context.Context, b booking.Booking, payload []byte) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer tx.Rollback(ctx) // no effect once the transaction is committed
+
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO bookings (id, slot_id, customer_id, idempotency_key, created_at)
+		 VALUES ($1, $2, $3, $4, $5)`,
+		b.ID, b.SlotID, b.CustomerID, b.IdempotencyKey, b.CreatedAt); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO outbox_events (event_type, payload, created_at, next_attempt_at)
+		 VALUES ($1, $2, $3, $3)`,
+		booking.EventBookingCreated, payload, b.CreatedAt); err != nil {
+		return fmt.Errorf("insert outbox event: %w", err)
+	}
+	return tx.Commit(ctx)
 }
 
 // resolveUniqueViolation explains why the INSERT of b was rejected. When two

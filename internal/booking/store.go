@@ -16,9 +16,10 @@ type Store interface {
 	// ErrSlotNotFound.
 	GetSlot(ctx context.Context, id string) (Slot, error)
 
-	// Book stores b if its slot exists and is still free. If a booking with
-	// the same idempotency key already exists, Book returns the result of
-	// Replay instead of creating anything. Errors: ErrSlotNotFound,
+	// Book stores b if its slot exists and is still free, together with its
+	// EventBookingCreated outbox event when the store has an outbox. If a
+	// booking with the same idempotency key already exists, Book returns the
+	// result of Replay instead of creating anything. Errors: ErrSlotNotFound,
 	// ErrSlotTaken, ErrIdempotencyConflict.
 	Book(ctx context.Context, b Booking) (BookingResult, error)
 }
