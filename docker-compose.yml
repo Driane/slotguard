@@ -1,4 +1,8 @@
-# Local dependencies for development. Start with: docker compose up -d
+# Local environment.
+#
+#   docker compose up -d                       PostgreSQL and Redis only (for go run / go test)
+#   docker compose --profile app up -d --build the whole service: API, webhook receiver, PostgreSQL, Redis
+#   docker compose --profile loadtest run --rm k6   the load test (see loadtest/README.md)
 services:
   postgres:
     image: postgres:17-alpine
@@ -25,6 +29,42 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  api:
+    profiles: ["app"]
+    build: .
+    environment:
+      DATABASE_URL: postgres://slotguard:slotguard@postgres:5432/slotguard?sslmode=disable
+      REDIS_URL: redis://redis:6379/0
+      WEBHOOK_URL: http://webhook-receiver:9090/webhooks
+      WEBHOOK_SECRET: dev-secret
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      webhook-receiver:
+        condition: service_started
+
+  webhook-receiver:
+    profiles: ["app"]
+    build:
+      context: .
+      args:
+        CMD: webhook-receiver
+    environment:
+      WEBHOOK_SECRET: dev-secret
+
+  k6:
+    profiles: ["loadtest"]
+    image: grafana/k6:2.3.0
+    volumes:
+      - ./loadtest:/scripts:ro
+    environment:
+      BASE_URL: http://api:8080
+    command: run /scripts/booking.js
 
 volumes:
   postgres-data:
