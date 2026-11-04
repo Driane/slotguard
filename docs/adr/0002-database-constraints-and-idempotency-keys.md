@@ -22,5 +22,5 @@ The naive approach (read whether the slot is free, then insert) leaves a window 
 
 - Correctness does not depend on a single process: it holds with several API instances behind a load balancer.
 - A replayed request answers `201 Created` like the original, so a retrying client needs no special handling; the header tells it what happened.
-- Each booking costs one extra `SELECT` (the idempotency lookup) before the `INSERT`. This is measured in the load tests planned for week 3, and a Redis cache can absorb it if needed.
+- Each booking costs one extra `SELECT` (the idempotency lookup) before the `INSERT`. The Redis cache absorbs it for retries and for popular slots (ADR 0003); the load tests on the roadmap will measure what remains.
 - Idempotency keys are kept forever for now. Expiring them (for example after 24 hours) is a later decision.
