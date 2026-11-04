@@ -2,18 +2,40 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
+
+	"github.com/Driane/slotguard/internal/booking"
 )
 
+// BookingService is what the HTTP layer needs from the booking package.
+// Depending on an interface keeps the handlers easy to test in isolation.
+type BookingService interface {
+	CreateSlot(ctx context.Context, slot booking.Slot) (booking.Slot, error)
+	GetSlot(ctx context.Context, id string) (booking.Slot, error)
+	Book(ctx context.Context, req booking.BookingRequest) (booking.BookingResult, error)
+}
+
 // NewRouter returns the HTTP handler with every route registered.
-func NewRouter() http.Handler {
+func NewRouter(svc BookingService, logger *slog.Logger) http.Handler {
+	h := &handlers{svc: svc, logger: logger}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", health)
+	mux.HandleFunc("POST /slots", h.createSlot)
+	mux.HandleFunc("GET /slots/{id}", h.getSlot)
+	mux.HandleFunc("POST /bookings", h.createBooking)
 	return mux
 }
 
 func health(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(body)
 }
