@@ -2,10 +2,16 @@ package httpapi
 
 import (
 	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/Driane/slotguard/internal/booking"
+	"github.com/Driane/slotguard/internal/metrics"
+	"github.com/Driane/slotguard/internal/storage/memory"
 )
 
 // call sends one request to router and returns the recorded response.
@@ -134,6 +140,33 @@ func TestBookingFlow(t *testing.T) {
 				t.Fatalf("error code = %q, want %q", got.Error, tt.wantCode)
 			}
 		})
+	}
+}
+
+func TestMetricsCountBookingResults(t *testing.T) {
+	m := metrics.New()
+	router := NewRouter(booking.NewService(memory.New()), slog.New(slog.NewTextHandler(io.Discard, nil)), m)
+	call(t, router, http.MethodPost, "/slots", slotBody, nil)
+
+	key := map[string]string{headerIdempotencyKey: "key-alice"}
+	call(t, router, http.MethodPost, "/bookings", `{"slot_id":"slot-1","customer_id":"alice"}`, key)
+	call(t, router, http.MethodPost, "/bookings", `{"slot_id":"slot-1","customer_id":"alice"}`, key)
+	call(t, router, http.MethodPost, "/bookings", `{"slot_id":"slot-1","customer_id":"bob"}`, map[string]string{headerIdempotencyKey: "key-bob"})
+
+	rec := call(t, router, http.MethodGet, "/metrics", "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /metrics status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		`slotguard_bookings_total{result="created"} 1`,
+		`slotguard_bookings_total{result="replayed"} 1`,
+		`slotguard_bookings_total{result="slot_taken"} 1`,
+		`slotguard_http_requests_total{route="POST /bookings",status="201"} 2`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("metrics do not contain %q", want)
+		}
 	}
 }
 

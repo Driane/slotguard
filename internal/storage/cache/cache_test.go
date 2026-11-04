@@ -129,4 +129,26 @@ func TestCacheAnswersWithoutTheStore(t *testing.T) {
 	if got := inner.books.Load(); got != 1 {
 		t.Fatalf("the inner store received %d bookings, want 1", got)
 	}
+	if got, want := store.Stats(), (cache.Stats{Hits: 101, Misses: 1}); got != want {
+		t.Fatalf("Stats() = %+v, want %+v", got, want)
+	}
+}
+
+func TestStatsCountBackendErrors(t *testing.T) {
+	store := cache.New(memory.New(), brokenBackend{}, time.Hour, discard)
+	svc := booking.NewService(store)
+	ctx := context.Background()
+
+	start := time.Now().Add(24 * time.Hour)
+	slot, err := svc.CreateSlot(ctx, booking.Slot{StartsAt: start, EndsAt: start.Add(time.Hour)})
+	if err != nil {
+		t.Fatalf("CreateSlot: %v", err)
+	}
+	if _, err := svc.Book(ctx, booking.BookingRequest{SlotID: slot.ID, CustomerID: "alice", IdempotencyKey: "k"}); err != nil {
+		t.Fatalf("Book with a broken cache: %v", err)
+	}
+	// Two failed reads (key, slot) and two failed writes after the booking.
+	if got := store.Stats(); got.Errors != 4 || got.Misses != 1 {
+		t.Fatalf("Stats() = %+v, want 4 errors and 1 miss", got)
+	}
 }

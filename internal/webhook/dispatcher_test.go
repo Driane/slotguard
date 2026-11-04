@@ -214,6 +214,9 @@ func TestEventIsBuriedAfterMaxAttempts(t *testing.T) {
 	if got := rcv.calls.Load(); got != 3 {
 		t.Fatalf("endpoint called %d times, want exactly MaxAttempts = 3", got)
 	}
+	if got, want := d.Stats(), (Stats{Retried: 2, Buried: 1}); got != want {
+		t.Fatalf("Stats() = %+v, want %+v", got, want)
+	}
 	if n := pending(t, store, clk.Now()); n != 0 {
 		t.Fatalf("%d events still pending, want the event buried", n)
 	}

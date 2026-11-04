@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/Driane/slotguard/internal/booking"
@@ -39,6 +40,19 @@ type Store struct {
 	backend Backend
 	ttl     time.Duration
 	logger  *slog.Logger
+
+	hits, misses, errors atomic.Uint64
+}
+
+// Stats counts booking attempts answered by the cache (hits), sent on to the
+// inner store (misses), and failed cache operations (errors).
+type Stats struct {
+	Hits, Misses, Errors uint64
+}
+
+// Stats returns the counters since the Store was created.
+func (s *Store) Stats() Stats {
+	return Stats{Hits: s.hits.Load(), Misses: s.misses.Load(), Errors: s.errors.Load()}
 }
 
 // New returns a Store caching entries for ttl in front of inner.
@@ -61,6 +75,7 @@ func (s *Store) GetSlot(ctx context.Context, id string) (booking.Slot, error) {
 // idempotency key first, then the slot.
 func (s *Store) Book(ctx context.Context, b booking.Booking) (booking.BookingResult, error) {
 	if existing, ok := s.cachedBooking(ctx, bookingByKeyPrefix+b.IdempotencyKey); ok {
+		s.hits.Add(1)
 		return booking.Replay(existing, b)
 	}
 
@@ -68,12 +83,14 @@ func (s *Store) Book(ctx context.Context, b booking.Booking) (booking.BookingRes
 	// flag. A retry of the winner that reads it before the key entry is
 	// written still recognises its own key and gets its booking back.
 	if holder, ok := s.cachedBooking(ctx, slotHolderPrefix+b.SlotID); ok {
+		s.hits.Add(1)
 		if holder.IdempotencyKey == b.IdempotencyKey {
 			return booking.Replay(holder, b)
 		}
 		return booking.BookingResult{}, booking.ErrSlotTaken
 	}
 
+	s.misses.Add(1)
 	res, err := s.inner.Book(ctx, b)
 	if err == nil {
 		s.remember(ctx, res.Booking)
@@ -95,6 +112,7 @@ func (s *Store) remember(ctx context.Context, b booking.Booking) {
 func (s *Store) cachedBooking(ctx context.Context, key string) (booking.Booking, bool) {
 	value, found, err := s.backend.Get(ctx, key)
 	if err != nil {
+		s.errors.Add(1)
 		s.logger.Warn("cache: read failed, using the store", "err", err)
 		return booking.Booking{}, false
 	}
@@ -111,6 +129,7 @@ func (s *Store) cachedBooking(ctx context.Context, key string) (booking.Booking,
 
 func (s *Store) set(ctx context.Context, key, value string) {
 	if err := s.backend.Set(ctx, key, value, s.ttl); err != nil {
+		s.errors.Add(1)
 		s.logger.Warn("cache: write failed", "err", err)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Driane/slotguard/internal/booking"
+	"github.com/Driane/slotguard/internal/metrics"
 )
 
 // maxBodyBytes caps request bodies: every valid request is a few hundred bytes.
@@ -20,8 +21,9 @@ const (
 )
 
 type handlers struct {
-	svc    BookingService
-	logger *slog.Logger
+	svc     BookingService
+	logger  *slog.Logger
+	metrics *metrics.Metrics // may be nil
 }
 
 type slotJSON struct {
@@ -94,12 +96,17 @@ func (h *handlers) createBooking(w http.ResponseWriter, r *http.Request) {
 		IdempotencyKey: r.Header.Get(headerIdempotencyKey),
 	})
 	if err != nil {
+		_, code := classify(err)
+		h.metrics.Booking(code)
 		h.writeError(w, r, err)
 		return
 	}
 
 	if res.Replayed {
+		h.metrics.Booking("replayed")
 		w.Header().Set(headerReplayed, "true")
+	} else {
+		h.metrics.Booking("created")
 	}
 	writeJSON(w, http.StatusCreated, bookingJSON{
 		ID:         res.Booking.ID,
@@ -120,23 +127,28 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
 	return nil
 }
 
-// writeError turns a domain error into an HTTP status and a stable error code
-// that clients can rely on.
-func (h *handlers) writeError(w http.ResponseWriter, r *http.Request, err error) {
-	status, code := http.StatusInternalServerError, "internal_error"
+// classify maps a domain error to an HTTP status and a stable error code that
+// clients can rely on.
+func classify(err error) (status int, code string) {
 	switch {
 	case errors.Is(err, booking.ErrInvalidRequest):
-		status, code = http.StatusBadRequest, "invalid_request"
+		return http.StatusBadRequest, "invalid_request"
 	case errors.Is(err, booking.ErrSlotNotFound):
-		status, code = http.StatusNotFound, "slot_not_found"
+		return http.StatusNotFound, "slot_not_found"
 	case errors.Is(err, booking.ErrSlotExists):
-		status, code = http.StatusConflict, "slot_exists"
+		return http.StatusConflict, "slot_exists"
 	case errors.Is(err, booking.ErrSlotTaken):
-		status, code = http.StatusConflict, "slot_taken"
+		return http.StatusConflict, "slot_taken"
 	case errors.Is(err, booking.ErrIdempotencyConflict):
-		status, code = http.StatusUnprocessableEntity, "idempotency_conflict"
+		return http.StatusUnprocessableEntity, "idempotency_conflict"
+	default:
+		return http.StatusInternalServerError, "internal_error"
 	}
+}
 
+// writeError answers with the status and code chosen by classify.
+func (h *handlers) writeError(w http.ResponseWriter, r *http.Request, err error) {
+	status, code := classify(err)
 	message := err.Error()
 	if status == http.StatusInternalServerError {
 		// Internal details stay in the logs, not in the response.

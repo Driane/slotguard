@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Driane/slotguard/internal/outbox"
@@ -47,6 +48,18 @@ type Dispatcher struct {
 	logger  *slog.Logger
 	now     func() time.Time
 	backoff func(attempt int) time.Duration
+
+	delivered, retried, buried atomic.Uint64
+}
+
+// Stats counts delivery outcomes since the Dispatcher was created.
+type Stats struct {
+	Delivered, Retried, Buried uint64
+}
+
+// Stats returns the delivery counters.
+func (d *Dispatcher) Stats() Stats {
+	return Stats{Delivered: d.delivered.Load(), Retried: d.retried.Load(), Buried: d.buried.Load()}
 }
 
 // NewDispatcher checks cfg, fills in the defaults and returns a Dispatcher.
@@ -144,11 +157,14 @@ func (d *Dispatcher) handle(ctx context.Context, e outbox.Event) {
 	var err error
 	switch {
 	case deliveryErr == nil:
+		d.delivered.Add(1)
 		err = d.store.MarkDelivered(recordCtx, e.ID, now)
 	case e.Attempts >= d.cfg.MaxAttempts:
+		d.buried.Add(1)
 		d.logger.Error("webhook abandoned", "event", e.ID, "attempts", e.Attempts, "err", deliveryErr)
 		err = d.store.Bury(recordCtx, e.ID, now, deliveryErr.Error())
 	default:
+		d.retried.Add(1)
 		next := now.Add(d.backoff(e.Attempts))
 		d.logger.Warn("webhook failed, will retry", "event", e.ID, "attempt", e.Attempts, "next", next, "err", deliveryErr)
 		err = d.store.Retry(recordCtx, e.ID, next, deliveryErr.Error())

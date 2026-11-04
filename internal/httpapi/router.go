@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/Driane/slotguard/internal/booking"
+	"github.com/Driane/slotguard/internal/metrics"
 )
 
 // BookingService is what the HTTP layer needs from the booking package.
@@ -18,16 +19,20 @@ type BookingService interface {
 	Book(ctx context.Context, req booking.BookingRequest) (booking.BookingResult, error)
 }
 
-// NewRouter returns the HTTP handler with every route registered.
-func NewRouter(svc BookingService, logger *slog.Logger) http.Handler {
-	h := &handlers{svc: svc, logger: logger}
+// NewRouter returns the HTTP handler with every route registered. m may be
+// nil: the API then runs without metrics and without GET /metrics.
+func NewRouter(svc BookingService, logger *slog.Logger, m *metrics.Metrics) http.Handler {
+	h := &handlers{svc: svc, logger: logger, metrics: m}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", health)
 	mux.HandleFunc("POST /slots", h.createSlot)
 	mux.HandleFunc("GET /slots/{id}", h.getSlot)
 	mux.HandleFunc("POST /bookings", h.createBooking)
-	return mux
+	if m != nil {
+		mux.Handle("GET /metrics", m.Handler())
+	}
+	return m.Middleware(mux)
 }
 
 func health(w http.ResponseWriter, _ *http.Request) {

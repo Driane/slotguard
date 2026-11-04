@@ -15,7 +15,7 @@ import (
 // these tests exercise the whole request path without a database.
 func newTestRouter() http.Handler {
 	svc := booking.NewService(memory.New())
-	return NewRouter(svc, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	return NewRouter(svc, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
 }
 
 func TestHealth(t *testing.T) {
