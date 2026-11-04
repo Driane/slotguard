@@ -1,0 +1,2 @@
+# Keep LF line endings in the repository so gofmt checks behave the same everywhere.
+* text=auto eol=lf

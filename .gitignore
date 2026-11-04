@@ -1,0 +1,9 @@
+# Binaries
+/bin/
+*.exe
+
+# Test output
+coverage.out
+
+# Local environment
+.env
