@@ -4,6 +4,16 @@ A booking service in Go that guarantees **zero double-booking under heavy concur
 
 > **Status: work in progress.** This repository is being built step by step; the roadmap below shows what is done and what comes next.
 
+## Performance
+
+On a single 20-core machine running everything (load generator included), with 3.7 million competing booking attempts in 60 seconds:
+
+- **62,750 requests/s** sustained, **p99 latency 11.6 ms**, 0 unexpected responses;
+- **0 slots booked twice**, and every one of the 89,985 bookings stored with its event;
+- 97.6% of attempts answered from Redis, and every webhook delivered in real time.
+
+The load test also found a real bug: Go's default of 2 idle connections per host exhausted the ephemeral ports under load. Fixing it raised throughput by 52%. Details, method and environment in [`loadtest/README.md`](loadtest/README.md).
+
 ## Why
 
 Booking systems fail quietly when many requests target the same slot at the same time: two customers end up holding the same appointment, a retried request creates a second booking, a webhook is lost or delivered twice. slotguard is a small, focused service that solves those problems explicitly and measures the result.
@@ -25,8 +35,11 @@ Booking systems fail quietly when many requests target the same slot at the same
 - [x] PostgreSQL storage with a uniqueness guarantee and integration tests
 - [x] Redis cache for slot holders and idempotency keys (no distributed lock, by design)
 - [x] Transactional outbox and signed webhooks with retries and a dead letter
-- [ ] Load test (k6) with published throughput and latency figures
-- [ ] Metrics and tracing
+- [x] Prometheus metrics (HTTP, bookings, cache, webhooks, outbox backlog) and purge of delivered events
+- [x] Docker image and one-command local environment
+- [x] Load test (k6) with published throughput and latency figures
+- [ ] Distributed tracing (OpenTelemetry)
+- [ ] Booking cancellation
 
 ## API
 
@@ -36,6 +49,7 @@ Booking systems fail quietly when many requests target the same slot at the same
 | `POST` | `/slots` | Create a slot: `{"id", "starts_at", "ends_at"}` (`id` optional) |
 | `GET` | `/slots/{id}` | Read a slot and whether it is still available |
 | `POST` | `/bookings` | Book a slot: `{"slot_id", "customer_id"}` + `Idempotency-Key` header |
+| `GET` | `/metrics` | Prometheus metrics |
 
 Errors use stable codes: `invalid_request` (400), `slot_not_found` (404), `slot_exists` and `slot_taken` (409), `idempotency_conflict` (422).
 
@@ -70,7 +84,15 @@ with two headers:
 
 ## Run locally
 
-Requirements: Go, Docker.
+The whole service in Docker (API, webhook receiver, PostgreSQL, Redis), with only Docker installed:
+
+```bash
+docker compose --profile app up -d --build
+curl localhost:8080/health
+docker compose logs -f webhook-receiver   # watch the signed webhooks arrive
+```
+
+Or from source, with Go:
 
 ```bash
 docker compose up -d   # PostgreSQL and Redis
@@ -113,6 +135,8 @@ internal/storage/postgres     PostgreSQL store, outbox and embedded migrations
 internal/storage/cache        Redis cache in front of any store
 internal/webhook              signing, verification and the delivery dispatcher
 internal/httpapi              HTTP handlers and error mapping
+internal/metrics              Prometheus metrics and HTTP middleware
+loadtest                      k6 scenarios, seed and verification SQL, results
 docs/adr                      architecture decision records
 ```
 

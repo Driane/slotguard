@@ -41,7 +41,7 @@ const (
 	// seconds or minutes; a day leaves a wide margin.
 	cacheTTL = 24 * time.Hour
 
-	// Delivered events are kept a week for inspection, then purged hourly.
+	// Delivered events are kept seven days for inspection, then purged hourly.
 	outboxRetention     = 7 * 24 * time.Hour
 	outboxPurgeInterval = time.Hour
 )
