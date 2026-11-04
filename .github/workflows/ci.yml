@@ -8,6 +8,26 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+
+    # A real PostgreSQL for the integration tests of internal/storage/postgres.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: slotguard
+          POSTGRES_PASSWORD: slotguard
+          POSTGRES_DB: slotguard
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U slotguard"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      SLOTGUARD_TEST_DATABASE_URL: postgres://slotguard:slotguard@localhost:5432/slotguard?sslmode=disable
+
     steps:
       - uses: actions/checkout@v4
 

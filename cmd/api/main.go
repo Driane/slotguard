@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -11,9 +12,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/Driane/slotguard/internal/booking"
 	"github.com/Driane/slotguard/internal/httpapi"
 	"github.com/Driane/slotguard/internal/storage/memory"
+	"github.com/Driane/slotguard/internal/storage/postgres"
 )
 
 func main() {
@@ -35,7 +39,13 @@ func run(logger *slog.Logger) error {
 		addr = ":" + port
 	}
 
-	svc := booking.NewService(memory.New())
+	store, closeStore, err := openStore(ctx, logger)
+	if err != nil {
+		return err
+	}
+	defer closeStore()
+
+	svc := booking.NewService(store)
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           httpapi.NewRouter(svc, logger),
@@ -60,4 +70,29 @@ func run(logger *slog.Logger) error {
 		defer cancel()
 		return srv.Shutdown(shutdownCtx)
 	}
+}
+
+// openStore uses PostgreSQL when DATABASE_URL is set, and the in-memory store
+// otherwise. The returned function releases the store's resources.
+func openStore(ctx context.Context, logger *slog.Logger) (booking.Store, func(), error) {
+	url := os.Getenv("DATABASE_URL")
+	if url == "" {
+		logger.Info("DATABASE_URL is not set: using the in-memory store")
+		return memory.New(), func() {}, nil
+	}
+
+	pool, err := pgxpool.New(ctx, url)
+	if err != nil {
+		return nil, nil, fmt.Errorf("connect to PostgreSQL: %w", err)
+	}
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, nil, fmt.Errorf("reach PostgreSQL: %w", err)
+	}
+	if err := postgres.Migrate(ctx, pool); err != nil {
+		pool.Close()
+		return nil, nil, fmt.Errorf("migrate: %w", err)
+	}
+	logger.Info("using the PostgreSQL store")
+	return postgres.New(pool), pool.Close, nil
 }
