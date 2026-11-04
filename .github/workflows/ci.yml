@@ -9,7 +9,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
-    # A real PostgreSQL for the integration tests of internal/storage/postgres.
+    # A real PostgreSQL and a real Redis for the integration tests.
     services:
       postgres:
         image: postgres:17-alpine
@@ -24,9 +24,19 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
 
     env:
       SLOTGUARD_TEST_DATABASE_URL: postgres://slotguard:slotguard@localhost:5432/slotguard?sslmode=disable
+      SLOTGUARD_TEST_REDIS_URL: redis://localhost:6379/0
 
     steps:
       - uses: actions/checkout@v4
