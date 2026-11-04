@@ -88,10 +88,19 @@ func NewDispatcher(store outbox.Store, cfg Config, logger *slog.Logger) (*Dispat
 		return nil, fmt.Errorf("webhook: lease (%s) must be longer than the request timeout (%s)", cfg.Lease, cfg.Timeout)
 	}
 
+	// Go's default transport keeps only 2 idle connections per host. With a
+	// batch of concurrent deliveries, every other connection would be closed
+	// and reopened, until the machine runs out of ephemeral ports ("cannot
+	// assign requested address"), as the load test showed. Keep one reusable
+	// connection per concurrent delivery instead.
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConns = cfg.BatchSize
+	transport.MaxIdleConnsPerHost = cfg.BatchSize
+
 	return &Dispatcher{
 		store:   store,
 		cfg:     cfg,
-		client:  &http.Client{Timeout: cfg.Timeout},
+		client:  &http.Client{Timeout: cfg.Timeout, Transport: transport},
 		logger:  logger,
 		now:     time.Now,
 		backoff: Backoff,

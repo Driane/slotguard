@@ -306,6 +306,23 @@ func TestNewDispatcherValidatesConfig(t *testing.T) {
 	}
 }
 
+// Regression test: with Go's default of 2 idle connections per host, the load
+// test exhausted the ephemeral ports. Each concurrent delivery must be able to
+// reuse its connection.
+func TestDispatcherReusesOneConnectionPerConcurrentDelivery(t *testing.T) {
+	d, err := NewDispatcher(memory.New(), Config{URL: "http://localhost", Secret: testSecret, BatchSize: 50}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("NewDispatcher: %v", err)
+	}
+	transport, ok := d.client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("client transport is %T, want *http.Transport", d.client.Transport)
+	}
+	if transport.MaxIdleConnsPerHost < 50 {
+		t.Fatalf("MaxIdleConnsPerHost = %d, want at least the batch size (50)", transport.MaxIdleConnsPerHost)
+	}
+}
+
 func TestBackoff(t *testing.T) {
 	tests := []struct {
 		attempt  int
